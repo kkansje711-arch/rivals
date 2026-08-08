@@ -46,6 +46,8 @@ setmetatable(_G, {
     end
 })
 
+--// PERFORMANCE FIXES: If you still lag, run _G.DisableBypass=true or set Settings.Esp* = false before loading
+--// This version throttles ESP to 15 FPS, Aimbot to 30 FPS, and makes toggle button zero-lag
 --// LOAD COMPKILLER UI
 local Compkiller = loadstring(game:HttpGet("https://raw.githubusercontent.com/4lpaca-pin/CompKiller/refs/heads/main/src/source.luau"))();
 
@@ -72,6 +74,92 @@ local Window = Compkiller.new({
     TextSize = 15,
 });
 
+--// FIXED: Lightweight draggable toggle button (no lag, no polling)
+local _lpLocal = game:GetService("Players").LocalPlayer
+local ToggleGui = Instance.new("ScreenGui")
+ToggleGui.Name = "Oregonnscripts_ToggleGui"
+ToggleGui.ResetOnSpawn = false
+ToggleGui.IgnoreGuiInset = true
+ToggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ToggleGui.DisplayOrder = 999
+do
+    local s, p = pcall(function() return gethui and gethui() end)
+    if s and p then ToggleGui.Parent = p
+    else
+        local s2, h = pcall(function() return get_hidden_gui and get_hidden_gui() end)
+        if s2 and h then ToggleGui.Parent = h
+        else
+            local ok = pcall(function() ToggleGui.Parent = game:GetService("CoreGui") end)
+            if not ok then ToggleGui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui") end
+        end
+    end
+end
+if Compkiller.ProtectGui then pcall(function() Compkiller.ProtectGui(ToggleGui) end) end
+for _,v in ipairs(ToggleGui.Parent:GetChildren()) do if v~=ToggleGui and v.Name=="Oregonnscripts_ToggleGui" then pcall(function() v:Destroy() end) end end
+
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "ToggleButton"
+ToggleButton.Parent = ToggleGui
+ToggleButton.Size = UDim2.new(0, 56, 0, 56)
+ToggleButton.Position = UDim2.new(0, 16, 0.5, -28)
+ToggleButton.AnchorPoint = Vector2.new(0,0.5)
+ToggleButton.BackgroundColor3 = Compkiller.Colors.Highlight
+ToggleButton.AutoButtonColor = false
+ToggleButton.Text = ""
+ToggleButton.ZIndex = 100
+Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(0, 14)
+local st = Instance.new("UIStroke", ToggleButton); st.Color=Color3.fromRGB(0,0,0); st.Thickness=1.2; st.Transparency=0.5
+local ic = Instance.new("ImageLabel", ToggleButton); ic.BackgroundTransparency=1; ic.Size=UDim2.new(0,26,0,26); ic.Position=UDim2.new(0.5,0,0.5,-6); ic.AnchorPoint=Vector2.new(0.5,0.5); ic.Image="rbxassetid://120245531583106"; ic.ImageColor3=Color3.fromRGB(255,255,255); ic.ZIndex=101; ic.ScaleType=Enum.ScaleType.Fit
+local lb = Instance.new("TextLabel", ToggleButton); lb.BackgroundTransparency=1; lb.Size=UDim2.new(1,0,0,10); lb.Position=UDim2.new(0,0,1,-13); lb.Text=Window.IsOpen and "CLOSE" or "OPEN"; lb.Font=Enum.Font.GothamBold; lb.TextSize=9; lb.TextColor3=Color3.fromRGB(255,255,255); lb.TextStrokeTransparency=0.5; lb.ZIndex=101
+local tsBtn = game:GetService("TweenService")
+local function tween(o,p,t) pcall(function() tsBtn:Create(o, TweenInfo.new(t or 0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), p):Play() end) end
+local ToggleHasDragged = false
+local function updateLabel() lb.Text = Window.IsOpen and "CLOSE" or "OPEN"; ic.ImageTransparency = Window.IsOpen and 0 or 0.2 end
+local function doToggle()
+    if ToggleHasDragged then return end
+    tween(ToggleButton, {Size=UDim2.new(0,48,0,48)}, 0.07); task.wait(0.07); tween(ToggleButton, {Size=UDim2.new(0,56,0,56)}, 0.10)
+    if Window._ToggleUI then pcall(function() Window:_ToggleUI() end)
+    elseif Window.Toggle then pcall(function() Window:Toggle(not Window.IsOpen) end)
+    elseif Window.SetVisible then pcall(function() Window:SetVisible(not Window.IsOpen) end)
+    else pcall(function() Window.Root.Enabled = not Window.Root.Enabled end) end
+    updateLabel()
+end
+ToggleButton.MouseButton1Click:Connect(doToggle)
+ToggleButton.TouchTap:Connect(doToggle)
+-- hook Window toggle to keep label synced without polling
+do
+    local orig = Window._ToggleUI
+    if orig then Window._ToggleUI = function(self,...) local r=orig(self,...); updateLabel(); return r end end
+    local orig2 = Window.Toggle
+    if orig2 then Window.Toggle = function(self,...) local r=orig2(self,...); task.wait(0.05); updateLabel(); return r end end
+end
+-- draggable
+do
+    local UIS = game:GetService("UserInputService")
+    local dragging, dragStart, startPos = false, nil, nil
+    local TH = 10
+    local function upd(inp)
+        local d = inp.Position - dragStart
+        if d.Magnitude > TH then ToggleHasDragged = true end
+        local np = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
+        local bs = ToggleButton.AbsoluteSize; if bs.X<1 then bs=Vector2.new(56,56) end
+        local x = math.clamp(np.X.Offset, 6, vp.X - bs.X - 6)
+        local y = math.clamp(np.Y.Offset, 6, vp.Y - bs.Y - 6)
+        ToggleButton.Position = UDim2.new(0,x,0,y); ToggleButton.AnchorPoint=Vector2.new(0,0)
+    end
+    ToggleButton.InputBegan:Connect(function(inp)
+        if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
+            dragging=true; ToggleHasDragged=false; dragStart=inp.Position; startPos=ToggleButton.Position
+            inp.Changed:Connect(function() if inp.UserInputState==Enum.UserInputState.End then dragging=false; task.wait(0.12); ToggleHasDragged=false end end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(inp) if dragging and (inp.UserInputType==Enum.UserInputType.MouseMovement or inp.UserInputType==Enum.UserInputType.Touch) then upd(inp) end end)
+    UIS.InputEnded:Connect(function(inp) if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then dragging=false end end)
+end
+game:GetService("UserInputService").InputBegan:Connect(function(inp,gpe) if not gpe and inp.KeyCode==Enum.KeyCode.RightAlt then doToggle() end end)
+
+
 --// NOTIFICATION ON LOAD
 Notifier.new({
     Title = "Oregonnscripts",
@@ -95,8 +183,8 @@ local TimeText = Watermark:AddText({
     Text = "TIME",
 });
 task.spawn(function()
-    while true do task.wait()
-        TimeText:SetText(Compkiller:GetTimeNow());
+    while true do task.wait(1)
+        pcall(function() TimeText:SetText(Compkiller:GetTimeNow()) end)
     end
 end)
 Watermark:AddText({
@@ -308,16 +396,23 @@ end
 
 if newAimbotConnection then newAimbotConnection:Disconnect() end
 
+-- FIXED: Throttled aimbot + reused RaycastParams to reduce lag
+local lastAimbotTick = 0
+local aimbotRayParams = RaycastParams.new()
+aimbotRayParams.FilterType = Enum.RaycastFilterType.Exclude
+aimbotRayParams.IgnoreWater = true
+
 newAimbotConnection = rs.RenderStepped:Connect(function()
     if not Settings.NewAimbotEnabled then
         aimDelta = Vector2.new(0, 0)
         return
     end
+    -- throttle to ~30 FPS instead of 60+ (big lag fix)
+    if tick() - lastAimbotTick < 0.033 then return end
+    lastAimbotTick = tick()
 
     local currentCamera = workspace.CurrentCamera
     local localCharacter = LocalPlayer.Character
-    local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
-
     if not currentCamera then return end
 
     local closestTargetPos = nil
@@ -325,12 +420,13 @@ newAimbotConnection = rs.RenderStepped:Connect(function()
     local screenCenter = Vector2.new(currentCamera.ViewportSize.X / 2, currentCamera.ViewportSize.Y / 2)
     local originPosition = currentCamera.CFrame.Position
 
-    local raycastParams = RaycastParams.new()
-    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-    raycastParams.IgnoreWater = true
+    -- reuse params
     if localCharacter then
-        raycastParams.FilterDescendantsInstances = {localCharacter}
+        aimbotRayParams.FilterDescendantsInstances = {localCharacter}
+    else
+        aimbotRayParams.FilterDescendantsInstances = {}
     end
+    local raycastParams = aimbotRayParams
 
     for _, otherPlayer in ipairs(players:GetPlayers()) do
         if otherPlayer ~= LocalPlayer and otherPlayer.Character then
@@ -427,7 +523,11 @@ FOVCircle.Filled = false
 
 local currentFovVisualPosition = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
 
+-- FIXED: FOV draw throttled slightly + early exit if not visible
 rs.RenderStepped:Connect(function()
+    if not Settings.FovVisible or (not Settings.FovFilled and not Settings.FovOutline) then
+        FOVCircle.Visible = false; FOVCircleBackground.Visible = false; return
+    end
     local center = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y / 2)
 
     if Settings.FovFollowHand and lp.Character then
@@ -732,41 +832,59 @@ end
 -- MAIN RENDERING PIPELINE
 --================================================================================
 local pipelineConnection
+-- FIXED: Throttled pipeline to stop lag (ESP at ~15 FPS, Crosshair/SilentAim optimized)
+local lastEspUpdate = 0
+local lastSilentAimTick = 0
 pipelineConnection = rs.RenderStepped:Connect(function(deltaTime)
-    -- Combat / Silent Aim
+    -- Combat / Silent Aim - throttle to 20 FPS, skip if disabled
     if Settings.Enabled then
-        local target = get_best_target(false)
-        if target then
-            local targetPosition = target.Position
-
-            if target.Parent and target.Parent:FindFirstChild("HumanoidRootPart") then
-                local velocity = target.Parent.HumanoidRootPart.AssemblyLinearVelocity
-                targetPosition = targetPosition + (velocity * Settings.Prediction)
+        if tick() - lastSilentAimTick >= 0.05 then
+            lastSilentAimTick = tick()
+            local target = get_best_target(false)
+            if target then
+                local targetPosition = target.Position
+                if target.Parent and target.Parent:FindFirstChild("HumanoidRootPart") then
+                    local velocity = target.Parent.HumanoidRootPart.AssemblyLinearVelocity
+                    targetPosition = targetPosition + (velocity * Settings.Prediction)
+                end
+                local targetPos = camera:WorldToViewportPoint(targetPosition)
+                local mousePos = uis:GetMouseLocation()
+                local smoothedX = mousePos.X + (targetPos.X - mousePos.X) * (1 - Settings.Smoothing)
+                local smoothedY = mousePos.Y + (targetPos.Y - mousePos.Y) * (1 - Settings.Smoothing)
+                pcall(function() vim:SendMouseMoveEvent(smoothedX, smoothedY, game) end)
             end
-
-            local targetPos = camera:WorldToViewportPoint(targetPosition)
-            local mousePos = uis:GetMouseLocation()
-
-            local smoothedX = mousePos.X + (targetPos.X - mousePos.X) * (1 - Settings.Smoothing)
-            local smoothedY = mousePos.Y + (targetPos.Y - mousePos.Y) * (1 - Settings.Smoothing)
-
-            vim:SendMouseMoveEvent(smoothedX, smoothedY, game)
         end
     end
 
-    -- Crosshair
+    -- Crosshair - only compute when enabled
     if Settings.CrosshairEnabled then
         crosshairAnchor.Visible = true
         local workingColor = typeof(Settings.CrosshairColorMode) == "Color3" and Settings.CrosshairColorMode or Color3.fromRGB(160, 32, 240)
-
         crosshairAnchor.Rotation = (crosshairAnchor.Rotation + (Settings.CrosshairSpeed * deltaTime)) % 360
         timePassed = timePassed + (deltaTime * PULSE_SPEED)
         local alpha = (math.sin(timePassed) + 1) / 2
         local currentGap = MIN_GAP + (alpha * (MAX_GAP - MIN_GAP))
-
         renderCrosshair(Settings.CrosshairStyle, workingColor, Settings.CrosshairLength, currentGap)
     else
-        crosshairAnchor.Visible = false
+        if crosshairAnchor.Visible then crosshairAnchor.Visible = false end
+    end
+    -- ESP throttled below
+    if tick() - lastEspUpdate < 0.07 then return end
+    lastEspUpdate = tick()
+    -- Early exit if NO ESP enabled at all (huge lag fix when ESP off)
+    local anyEsp = Settings.EspBoxes or Settings.EspFilledBoxes or Settings.EspLines or Settings.EspHealth or Settings.EspNames or Settings.EspDistance or Settings.EspChams
+    if not anyEsp then
+        -- hide all if any left visible (run once)
+        for _,cache in pairs(EspRegistry) do
+            if cache.Box.Visible then cache.Box.Visible=false end
+            if cache.FilledBox.Visible then cache.FilledBox.Visible=false end
+            if cache.Tracer.Visible then cache.Tracer.Visible=false end
+            if cache.HealthBar.Visible then cache.HealthBar.Visible=false end
+            if cache.Tag.Visible then cache.Tag.Visible=false end
+            if cache.DistTag.Visible then cache.DistTag.Visible=false end
+            if cache.CurrentCham and cache.CurrentCham.Enabled then cache.CurrentCham.Enabled=false end
+        end
+        return
     end
 
     -- ESP Rendering
@@ -2508,4 +2626,6 @@ local function sb()
     mlb()
 end
 
-sb()
+
+-- FIXED: Bypass can be disabled for performance - set _G.DisableBypass = true before load to skip
+if not _G.DisableBypass then pcall(sb) else warn("[Oregonnscripts] Bypass disabled for performance (set _G.DisableBypass = false to enable)") end
