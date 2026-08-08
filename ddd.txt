@@ -155,8 +155,18 @@ UserSettings:AddDropdown({
 -- SETTINGS STORAGE
 --================================================================================
 local Settings = {
-    -- Combat / Silent Aim (kept enabled by default)
-    Enabled = true,
+    -- Aimbot Settings
+    NewAimbotEnabled = false,
+    NewAimbotSmoothing = 0.5,
+    NewAimbotPrediction = 0.1,
+    NewAimbotStrength = 1.0,
+    NewAimbotManualWeight = 0.25,
+    NewAimbotMaxDistance = 300,
+    NewAimbotFOVRadius = 400,
+    NewAimbotTargetPart = "Head",
+
+    -- Combat / Silent Aim
+    Enabled = false,
     FOV = 150,
     FovVisible = true,
     FovFilled = false,
@@ -274,7 +284,135 @@ local DeviceMapping = {
     ["VR"] = "VR"
 }
 
--- New Aimbot removed (Silent Aim kept)
+--================================================================================
+-- AIMBOT SYSTEM (New Aimbot)
+--================================================================================
+local aimDelta = Vector2.new(0, 0)
+local newAimbotConnection = nil
+
+local function getTargetPart(character, targetType)
+    if targetType == "Head" then
+        return character:FindFirstChild("Head")
+    elseif targetType == "Body" then
+        return character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
+    elseif targetType == "Both" then
+        local head = character:FindFirstChild("Head")
+        local body = character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
+        if head and body then
+            return math.random() < 0.5 and head or body
+        end
+        return head or body
+    end
+    return character:FindFirstChild("Head")
+end
+
+if newAimbotConnection then newAimbotConnection:Disconnect() end
+
+newAimbotConnection = rs.RenderStepped:Connect(function()
+    if not Settings.NewAimbotEnabled then
+        aimDelta = Vector2.new(0, 0)
+        return
+    end
+
+    local currentCamera = workspace.CurrentCamera
+    local localCharacter = LocalPlayer.Character
+    local localRoot = localCharacter and localCharacter:FindFirstChild("HumanoidRootPart")
+
+    if not currentCamera then return end
+
+    local closestTargetPos = nil
+    local shortestDistance2D = Settings.NewAimbotFOVRadius
+    local screenCenter = Vector2.new(currentCamera.ViewportSize.X / 2, currentCamera.ViewportSize.Y / 2)
+    local originPosition = currentCamera.CFrame.Position
+
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+    raycastParams.IgnoreWater = true
+    if localCharacter then
+        raycastParams.FilterDescendantsInstances = {localCharacter}
+    end
+
+    for _, otherPlayer in ipairs(players:GetPlayers()) do
+        if otherPlayer ~= LocalPlayer and otherPlayer.Character then
+            local targetPart = getTargetPart(otherPlayer.Character, Settings.NewAimbotTargetPart)
+            local humanoid = otherPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+            if targetPart and humanoid and humanoid.Health > 0 then
+                local distance3D = (targetPart.Position - originPosition).Magnitude
+                if distance3D <= Settings.NewAimbotMaxDistance then
+
+                    local predictedPosition = targetPart.Position
+                    if otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                        local velocity = otherPlayer.Character.HumanoidRootPart.AssemblyLinearVelocity
+                        predictedPosition = predictedPosition + (velocity * Settings.NewAimbotPrediction)
+                    end
+
+                    local screenPos, onScreen = currentCamera:WorldToViewportPoint(predictedPosition)
+
+                    if onScreen then
+                        local targetScreenPos = Vector2.new(screenPos.X, screenPos.Y)
+                        local distance2D = (targetScreenPos - screenCenter).Magnitude
+
+                        if distance2D < shortestDistance2D then
+                            local direction = predictedPosition - originPosition
+                            local raycastResult = Workspace:Raycast(originPosition, direction, raycastParams)
+
+                            local isVisible = not raycastResult or raycastResult.Instance:IsDescendantOf(otherPlayer.Character)
+
+                            if isVisible then
+                                shortestDistance2D = distance2D
+                                closestTargetPos = targetScreenPos
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if closestTargetPos then
+        aimDelta = Vector2.new(
+            (closestTargetPos.X - screenCenter.X) * Settings.NewAimbotSmoothing,
+            (closestTargetPos.Y - screenCenter.Y) * Settings.NewAimbotSmoothing
+        )
+    else
+        aimDelta = Vector2.new(0, 0)
+    end
+end)
+
+local oldGetMouseDelta
+oldGetMouseDelta = hookfunction(UserInputService.GetMouseDelta, function(self)
+    local realDelta = oldGetMouseDelta(self)
+    if not checkcaller() and Settings.NewAimbotEnabled and aimDelta ~= Vector2.new(0, 0) then
+        return (realDelta * Settings.NewAimbotManualWeight) + (aimDelta * Settings.NewAimbotStrength)
+    end
+    return realDelta
+end)
+
+local oldIndex
+oldIndex = hookmetamethod(game, "__index", function(self, key)
+    if not checkcaller() and typeof(self) == "Instance" then
+        if self:IsA("InputObject") and key == "Delta" then
+            local realDelta = oldIndex(self, key)
+            if Settings.NewAimbotEnabled and aimDelta ~= Vector2.new(0, 0) then
+                return Vector3.new(
+                    (realDelta.X * Settings.NewAimbotManualWeight) + (aimDelta.X * Settings.NewAimbotStrength),
+                    (realDelta.Y * Settings.NewAimbotManualWeight) + (aimDelta.Y * Settings.NewAimbotStrength),
+                    0
+                )
+            end
+        elseif self:IsA("UserInputService") then
+            if key == "MouseEnabled" then
+                return true
+            elseif key == "MouseBehavior" then
+                if Settings.NewAimbotEnabled and aimDelta ~= Vector2.new(0, 0) then
+                    return Enum.MouseBehavior.LockCenter
+                end
+            end
+        end
+    end
+    return oldIndex(self, key)
+end)
 
 --================================================================================
 -- FOV DRAWING (Circles)
@@ -813,7 +951,125 @@ task.spawn(function()
     end
 end)
 
--- Aimbot tab removed (Silent Aim kept in Combat)
+--================================================================================
+-- UI TABS - AIMBOT
+--================================================================================
+Window:DrawCategory({
+    Name = "Aimbot"
+});
+
+local AimbotTab = Window:DrawTab({
+    Name = "Aimbot",
+    Icon = "target",
+    EnableScrolling = true
+});
+
+local AimbotLeft = AimbotTab:DrawSection({
+    Name = "Aimbot Settings",
+    Position = "left"
+});
+
+local AimbotRight = AimbotTab:DrawSection({
+    Name = "Target Selection",
+    Position = "right"
+});
+
+-- Aimbot Toggle
+AimbotLeft:AddToggle({
+    Name = "Enable Aimbot",
+    Flag = "NewAimbotEnabled",
+    Default = false,
+    Callback = function(v)
+        Settings.NewAimbotEnabled = v
+    end,
+});
+
+AimbotLeft:AddSlider({
+    Name = "Smoothing",
+    Min = 0.01,
+    Max = 1.0,
+    Default = 0.5,
+    Round = 2,
+    Flag = "NewAimbotSmoothing",
+    Callback = function(v)
+        Settings.NewAimbotSmoothing = v
+    end,
+});
+
+AimbotLeft:AddSlider({
+    Name = "Strength",
+    Min = 0.1,
+    Max = 2.0,
+    Default = 1.0,
+    Round = 2,
+    Flag = "NewAimbotStrength",
+    Callback = function(v)
+        Settings.NewAimbotStrength = v
+    end,
+});
+
+AimbotLeft:AddSlider({
+    Name = "Prediction Strength",
+    Min = 0,
+    Max = 0.5,
+    Default = 0.1,
+    Round = 3,
+    Flag = "NewAimbotPrediction",
+    Callback = function(v)
+        Settings.NewAimbotPrediction = v
+    end,
+});
+
+AimbotLeft:AddSlider({
+    Name = "Manual Control Weight",
+    Min = 0,
+    Max = 1.0,
+    Default = 0.25,
+    Round = 2,
+    Flag = "NewAimbotManualWeight",
+    Callback = function(v)
+        Settings.NewAimbotManualWeight = v
+    end,
+});
+
+AimbotRight:AddSlider({
+    Name = "Max Target Distance",
+    Min = 50,
+    Max = 1000,
+    Default = 300,
+    Round = 0,
+    Flag = "NewAimbotMaxDistance",
+    Callback = function(v)
+        Settings.NewAimbotMaxDistance = v
+    end,
+});
+
+AimbotRight:AddSlider({
+    Name = "FOV Radius",
+    Min = 50,
+    Max = 800,
+    Default = 400,
+    Round = 0,
+    Flag = "NewAimbotFOVRadius",
+    Callback = function(v)
+        Settings.NewAimbotFOVRadius = v
+    end,
+});
+
+AimbotRight:AddDropdown({
+    Name = "Target Part",
+    Default = "Head",
+    Flag = "NewAimbotTargetPart",
+    Values = {"Head", "Body", "Both"},
+    Callback = function(v)
+        Settings.NewAimbotTargetPart = v
+    end,
+});
+
+AimbotRight:AddParagraph({
+    Title = "Info",
+    Content = "Head = head only\nBody = torso/root\nBoth = randomly alternates"
+});
 
 --================================================================================
 -- UI TABS - COMBAT
@@ -2005,117 +2261,11 @@ local ConfigTab = Window:DrawConfig({
 ConfigTab:Init();
 
 --================================================================================
--- FLOATING UI TOGGLE BUTTON (Open / Close Menu)
---================================================================================
-do
-    local ToggleGui = Instance.new("ScreenGui")
-    ToggleGui.Name = "OregonnscriptsUIToggle"
-    ToggleGui.ResetOnSpawn = false
-    ToggleGui.IgnoreGuiInset = true
-    ToggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-    local success, parent = pcall(function()
-        return gethui and gethui() or game:GetService("CoreGui")
-    end)
-    ToggleGui.Parent = success and parent or lp:WaitForChild("PlayerGui")
-
-    local ToggleButton = Instance.new("TextButton")
-    ToggleButton.Name = "ToggleButton"
-    ToggleButton.Size = UDim2.fromOffset(48, 48)
-    ToggleButton.Position = UDim2.new(0, 12, 0, 12)
-    ToggleButton.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-    ToggleButton.Text = "UI"
-    ToggleButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-    ToggleButton.Font = Enum.Font.GothamBold
-    ToggleButton.TextSize = 15
-    ToggleButton.AutoButtonColor = false
-    ToggleButton.Parent = ToggleGui
-
-    local UICorner = Instance.new("UICorner")
-    UICorner.CornerRadius = UDim.new(1, 0)
-    UICorner.Parent = ToggleButton
-
-    local UIStroke = Instance.new("UIStroke")
-    UIStroke.Color = Color3.fromRGB(140, 0, 255)
-    UIStroke.Thickness = 2
-    UIStroke.Parent = ToggleButton
-
-    -- Make the button draggable
-    local dragging = false
-    local dragInput, dragStart, startPos
-
-    ToggleButton.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = ToggleButton.Position
-
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end)
-        end
-    end)
-
-    ToggleButton.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
-
-    game:GetService("UserInputService").InputChanged:Connect(function(input)
-        if dragging and input == dragInput then
-            local delta = input.Position - dragStart
-            ToggleButton.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-
-    -- Toggle functionality
-    local menuVisible = true
-
-    local function toggleUI()
-        menuVisible = not menuVisible
-
-        -- Compkiller Window toggle
-        pcall(function()
-            if Window.SetVisible then
-                Window:SetVisible(menuVisible)
-            elseif Window.Visible ~= nil then
-                Window.Visible = menuVisible
-            else
-                -- Fallback: try common methods
-                if menuVisible then
-                    Window:Show()
-                else
-                    Window:Hide()
-                end
-            end
-        end)
-
-        ToggleButton.Text = menuVisible and "UI" or "OFF"
-        UIStroke.Color = menuVisible and Color3.fromRGB(140, 0, 255) or Color3.fromRGB(80, 80, 80)
-    end
-
-    ToggleButton.MouseButton1Click:Connect(toggleUI)
-
-    -- Optional: right click to reset position
-    ToggleButton.MouseButton2Click:Connect(function()
-        ToggleButton.Position = UDim2.new(0, 12, 0, 12)
-    end)
-
-    -- Initial state
-    ToggleButton.Text = "UI"
-end
-
---================================================================================
 -- CLEANUP ON UNLOAD
 --================================================================================
 local function OnUnload()
     if pipelineConnection then pipelineConnection:Disconnect() end
+    if newAimbotConnection then newAimbotConnection:Disconnect() end
     pcall(function() crosshairGui:Destroy() end)
     pcall(function() EspGui:Destroy() end)
     pcall(function() FOVCircle:Destroy() end)
@@ -2123,10 +2273,6 @@ local function OnUnload()
     for _, cache in pairs(EspRegistry) do
         if cache.CurrentCham then pcall(function() cache.CurrentCham:Destroy() end) end
     end
-    pcall(function()
-        local tg = game:GetService("CoreGui"):FindFirstChild("OregonnscriptsUIToggle") or lp.PlayerGui:FindFirstChild("OregonnscriptsUIToggle")
-        if tg then tg:Destroy() end
-    end)
 end
 
 --================================================================================
